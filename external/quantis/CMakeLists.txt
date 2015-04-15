@@ -56,11 +56,9 @@ ADD_DEPENDENCIES(TARGET_libquantis TARGET_libusb)
 
 
 # 3) Provide all variables for the build.
-SET(LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/Quantis-v13.11.08/install/lib/libquantis.a)
+SET(LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/Quantis-v13.11.08/install/lib/libQuantis.a)
 
-IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU"  AND  "${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
-	SET(LDFLAGS "-pthread -lrt -ludev")
-ENDIF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU"  AND  "${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
+SET(LDFLAGS "")
 
 SET(INCLUDE_DIRECTORIES ${CMAKE_CURRENT_BINARY_DIR}/Quantis-v13.11.08/install/include)
 
