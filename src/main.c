@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "Quantis.h"
@@ -110,7 +111,6 @@ ssize_t socket_write(int fildes, void *buf, size_t nbyte)
 
 
 
-
 typedef enum SERVER_STATE_ENUM
 {
 	SERVER_STATE_NotConnected              = 0,    /* No open connection. */
@@ -131,6 +131,16 @@ typedef struct SERVER_HANDLE_STRUCT
 	unsigned char aucCmd[8];
 	unsigned char aucData[257];
 } SERVER_HANDLE_T;
+
+
+
+void server_close_instance(SERVER_HANDLE_T *ptHandle)
+{
+	/* Close the server instance. */
+	close(ptHandle->iFd);
+	ptHandle->tState = SERVER_STATE_NotConnected;
+	ptHandle->iFd    = -1;
+}
 
 
 
@@ -217,11 +227,7 @@ void server_state_idle(SERVER_HANDLE_T *ptHandle)
 		if( errno!=0 )
 		{
 			fprintf(stderr, "read error: %d %s\n", errno, strerror(errno));
-			
-			/* Close the server instance. */
-			close(iFd);
-			ptHandle->tState = SERVER_STATE_NotConnected;
-			ptHandle->iFd    = -1;
+			server_close_instance(ptHandle);
 		}
 	}
 }
@@ -329,8 +335,16 @@ void server_state_receive_cmd(SERVER_HANDLE_T *ptHandle)
 void read_random_bytes(unsigned char *pucData, size_t sizData)
 {
 	int iResult;
+	char acDataStamp[256];
+	time_t t;
+	struct tm *tmp;
 
-	printf("Requested %d random bytes.\n", sizData);
+
+	t = time(NULL);
+	tmp = localtime(&t);
+	memset(acDataStamp, 0, sizeof(acDataStamp));
+	strftime(acDataStamp, sizeof(acDataStamp)-1, "%F %T", tmp);
+	printf("%s: Requested %d random bytes.\n", acDataStamp, sizData);
 	while( sizData!=0 )
 	{
 		iResult = QuantisRead(QUANTIS_DEVICE_USB, 0, pucData, sizData);
@@ -387,15 +401,11 @@ static void server_loop(int iSocketFd, struct sockaddr_un *psSocketAddr)
 	int iResult;
 	int iFd;
 	unsigned int uiCnt;
-	unsigned int uiFreeServerHandles;
 	SERVER_HANDLE_T atServerHandles[MAX_CONNECTIONS];
 	ssize_t ssizResult;
 	socklen_t sSockAddrLen;
 	unsigned char ucDataSize;
 
-
-	/* All server handles are free now. */
-	uiFreeServerHandles = MAX_CONNECTIONS;
 
 	/* Initialize all server handles. */
 	for(uiCnt=0; uiCnt<MAX_CONNECTIONS; ++uiCnt)
@@ -555,38 +565,33 @@ fprintf(stderr, "write: ignoring %d bytes of data\n", ucDataSize);
 			/* Is there a new connection? */
 			if( FD_ISSET(iSocketFd, &sReadFdSet) )
 			{
-				/* Is at least one server slot free? */
-				if( uiFreeServerHandles>0 )
+				/* Find the first free slot. */
+				uiCnt = 0;
+				while( uiCnt<MAX_CONNECTIONS )
 				{
-					/* Find the first free slot. */
-					uiCnt = 0;
-					while( uiCnt<MAX_CONNECTIONS )
+					if(atServerHandles[uiCnt].tState==SERVER_STATE_NotConnected)
 					{
-						if(atServerHandles[uiCnt].tState==SERVER_STATE_NotConnected)
-						{
-							break;
-						}
-						++uiCnt;
+						break;
 					}
+					++uiCnt;
+				}
 
-					if( uiCnt<MAX_CONNECTIONS )
+				if( uiCnt<MAX_CONNECTIONS )
+				{
+					sSockAddrLen = sizeof(struct sockaddr_un);
+					iFd = accept(iSocketFd, (struct sockaddr*) psSocketAddr, &sSockAddrLen);
+					if( iFd>=0 )
 					{
-						sSockAddrLen = sizeof(struct sockaddr_un);
-						iFd = accept(iSocketFd, (struct sockaddr*) psSocketAddr, &sSockAddrLen);
-						if( iFd>=0 )
+						iResult = set_fd_to_non_blocking(iFd);
+						if( iResult!=0 )
 						{
-							iResult = set_fd_to_non_blocking(iFd);
-							if( iResult!=0 )
-							{
-								fprintf(stderr, "ERROR: failed to set the sockets flags: (%d) %s\n", errno, strerror(errno));
-								exit(EXIT_FAILURE);
-							}
-							else
-							{
-								atServerHandles[uiCnt].tState = SERVER_STATE_Idle;
-								atServerHandles[uiCnt].iFd    = iFd;
-								--uiFreeServerHandles;
-							}
+							fprintf(stderr, "ERROR: failed to set the sockets flags: (%d) %s\n", errno, strerror(errno));
+							exit(EXIT_FAILURE);
+						}
+						else
+						{
+							atServerHandles[uiCnt].tState = SERVER_STATE_Idle;
+							atServerHandles[uiCnt].iFd    = iFd;
 						}
 					}
 				}
