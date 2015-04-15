@@ -9,6 +9,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "Quantis.h"
 
 
 #define SOCKET_DEFAULT "/tmp/quantisd"
@@ -325,18 +326,38 @@ void server_state_receive_cmd(SERVER_HANDLE_T *ptHandle)
 
 
 
+void read_random_bytes(unsigned char *pucData, size_t sizData)
+{
+	int iResult;
+
+	while( sizData!=0 )
+	{
+		iResult = QuantisRead(QUANTIS_DEVICE_USB, 0, pucData, sizData);
+		if( iResult<0 )
+		{
+			fprintf(stderr, "ERROR: Failed to read %d bytes from the Quantis device: %d\n", sizData, iResult);
+			exit(EXIT_FAILURE);
+		}
+		else if( iResult>sizData )
+		{
+			fprintf(stderr, "ERROR: requested only %d bytes , but read %d from the Quantis device!\n", sizData, iResult);
+			exit(EXIT_FAILURE);
+		}
+		else
+		{
+			sizData -= iResult;
+		}
+	}
+}
+
+
+
 void send_random_packet(SERVER_HANDLE_T *ptHandle, unsigned char ucPacketSize)
 {
-	unsigned int uiCnt;
-
-
 	ptHandle->uiMax = ucPacketSize + 1;
 	ptHandle->uiCnt = 0;
 	ptHandle->aucData[0] = ucPacketSize;
-	for(uiCnt=0; uiCnt<ucPacketSize; ++uiCnt)
-	{
-		ptHandle->aucData[uiCnt+1] = uiCnt & 0xffU;
-	}
+	read_random_bytes(ptHandle->aucData+1, ucPacketSize);
 	ptHandle->tState = SERVER_STATE_SendData;
 }
 
@@ -349,10 +370,7 @@ void send_random_packet_block(SERVER_HANDLE_T *ptHandle, unsigned char ucPacketS
 
 	ptHandle->uiMax = ucPacketSize;
 	ptHandle->uiCnt = 0;
-	for(uiCnt=0; uiCnt<ucPacketSize; ++uiCnt)
-	{
-		ptHandle->aucData[uiCnt] = uiCnt & 0xffU;
-	}
+	read_random_bytes(ptHandle->aucData, ucPacketSize);
 	ptHandle->tState = SERVER_STATE_SendData;
 }
 
@@ -584,9 +602,21 @@ int main(void)
 	int iSocketFd;
 	struct stat sSocketStatBuffer;
 	struct sockaddr_un sSocketAddr;
+	int iQuantisDevices;
 
 
 	printf("quantisd V1.0 by cthelen@hilscher.com\n");
+	printf("Using Quantis library V%f\n", QuantisGetLibVersion());
+
+
+	/* Look for a quantis device. For now take the first USB device. */
+	iQuantisDevices = QuantisCount(QUANTIS_DEVICE_USB);
+	if( iQuantisDevices==0 )
+	{
+		fprintf(stderr, "ERROR: No Quantis USB devices found!\n");
+		exit(EXIT_FAILURE);
+	}
+	printf("Found %d Quantis USB devices. Using first device.\n", iQuantisDevices);
 
 
 	pcSocketPath = SOCKET_DEFAULT;
