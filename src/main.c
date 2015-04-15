@@ -66,7 +66,7 @@ ssize_t socket_read(int fildes, void *buf, size_t nbyte)
 #endif
 		else if (retval == -1)
 		{
-			fprintf(stderr, "read() in socket_read() failed: %d", errno);
+			fprintf(stderr, "read() in socket_read() failed: %d %s\n", errno, strerror(errno));
 			break;
 		}
 		else
@@ -80,11 +80,44 @@ ssize_t socket_read(int fildes, void *buf, size_t nbyte)
 
 
 
+ssize_t socket_write(int fildes, void *buf, size_t nbyte)
+{
+  ssize_t retval;
+
+  for (;;) {
+    retval = write(fildes, buf, nbyte);
+    if (retval >= 0)
+      break;
+    else if (errno == EINTR)
+      continue;
+    else if (errno == EAGAIN)
+      continue;
+#ifdef EWOULDBLOCK
+    else if (errno == EWOULDBLOCK)
+      continue;
+#endif
+    else if (retval == -1) {
+      fprintf(stderr, "write() in socket_write() failed: %d %s\n", errno, strerror(errno));
+      break;
+    }
+    else
+      break;
+  }
+  
+  return retval;
+}
+
+
+
 
 typedef enum SERVER_STATE_ENUM
 {
-	SERVER_STATE_NotConnected   = 0,    /* No open connection. */
-	SERVER_STATE_Idle           = 1,    /* Waiting for new commands. */
+	SERVER_STATE_NotConnected              = 0,    /* No open connection. */
+	SERVER_STATE_Idle                      = 1,    /* Waiting for new commands. */
+	SERVER_STATE_SendData                  = 2,    /* Send the buffer. */
+	SERVER_STATE_GetReadParameter          = 3,
+	SERVER_STATE_GetReadBlockingParameter  = 4,
+	SERVER_STATE_GetWriteParameter         = 5
 } SERVER_STATE_T;
 
 
@@ -92,8 +125,237 @@ typedef struct SERVER_HANDLE_STRUCT
 {
 	SERVER_STATE_T tState;
 	int iFd;
+	unsigned int uiMax;
+	unsigned int uiCnt;
 	unsigned char aucCmd[8];
+	unsigned char aucData[257];
 } SERVER_HANDLE_T;
+
+
+
+void server_state_idle(SERVER_HANDLE_T *ptHandle)
+{
+	int iFd;
+	ssize_t ssizResult;
+	unsigned char *pucData;
+	size_t sizData;
+	unsigned char ucCommand;
+	unsigned long ulValue;
+	unsigned int uiCnt;
+
+
+	/* Get the file descriptor. */
+	iFd = ptHandle->iFd;
+
+	/* Read the command byte. */
+	ssizResult = socket_read(iFd, ptHandle->aucCmd, 1);
+	fprintf(stderr, "read: %d\n", ssizResult);
+	if( ssizResult==1 )
+	{
+		fprintf(stderr, "s%02d cmd: %02x\n", uiCnt, ptHandle->aucCmd[0]);
+
+		/* Decode the command. */
+		ucCommand = ptHandle->aucCmd[0];
+		if( ucCommand==0x00 )
+		{
+			/* Return the number of bits of entropy in the pool. */
+			/* FIXME: what should I return here? */
+			ulValue = 4096*8;
+
+			ptHandle->uiMax = 4;
+			ptHandle->uiCnt = 0;
+			ptHandle->aucData[0] =  ulValue         & 0x000000ffU;
+			ptHandle->aucData[1] = (ulValue >>  8U) & 0x000000ffU;
+			ptHandle->aucData[2] = (ulValue >> 16U) & 0x000000ffU;
+			ptHandle->aucData[3] = (ulValue >> 24U) & 0x000000ffU;
+			ptHandle->tState = SERVER_STATE_SendData;
+		}
+		else if( ucCommand==0x01 )
+		{
+			/* Read some random bytes.
+			 * Expect the size information.
+			 */
+			ptHandle->uiMax = 1;
+			ptHandle->uiCnt = 0;
+			ptHandle->tState = SERVER_STATE_GetReadParameter;
+		}
+		else if( ucCommand==0x02 )
+		{
+			/* Read some random bytes.
+			 * Expect the size information.
+			 */
+			ptHandle->uiMax = 1;
+			ptHandle->uiCnt = 0;
+			ptHandle->tState = SERVER_STATE_GetReadBlockingParameter;
+		}
+		else if( ucCommand==0x03 )
+		{
+			/* Receive entropy bytes.
+			 * Expect the size information.
+			 */
+			ptHandle->uiMax = 5;
+			ptHandle->uiCnt = 0;
+			ptHandle->tState = SERVER_STATE_GetWriteParameter;
+		}
+		else if( ucCommand==0x04 )
+		{
+			/* Get PID. */
+			/* FIXME: insert the real PID here. */
+			ptHandle->uiMax = 5;
+			ptHandle->uiCnt = 0;
+			ptHandle->aucData[0] = 4;
+			ptHandle->aucData[1] = '1';
+			ptHandle->aucData[2] = '2';
+			ptHandle->aucData[3] = '3';
+			ptHandle->aucData[4] = 0;
+			ptHandle->tState = SERVER_STATE_SendData;
+		}
+	}
+	else
+	{
+		if( errno!=0 )
+		{
+			fprintf(stderr, "read error: %d %s\n", errno, strerror(errno));
+			
+			/* Close the server instance. */
+			close(iFd);
+			ptHandle->tState = SERVER_STATE_NotConnected;
+			ptHandle->iFd    = -1;
+		}
+	}
+}
+
+
+
+void server_state_send_data(SERVER_HANDLE_T *ptHandle)
+{
+	int iFd;
+	ssize_t ssizResult;
+	unsigned char *pucData;
+	size_t sizData;
+
+
+	/* Get the file descriptor. */
+	iFd = ptHandle->iFd;
+
+	/* Are some bytes left to send? */
+	if( ptHandle->uiCnt>=ptHandle->uiMax )
+	{
+		/* No -> sending finished. */
+		ptHandle->tState = SERVER_STATE_Idle;
+	}
+	else if( ptHandle->uiCnt>=sizeof(ptHandle->aucData) )
+	{
+		fprintf(stderr, "The buffer index exceeds the buffer size!\n");
+		exit(EXIT_FAILURE);
+	}
+	else
+	{
+		/* Get the number of bytes left to send. */
+		sizData = ptHandle->uiMax - ptHandle->uiCnt;
+		/* Get the pointer to the data. */
+		pucData = ptHandle->aucData + ptHandle->uiCnt;
+		
+		/* Send the data. */
+		ssizResult = socket_write(iFd, pucData, sizData);
+		if( ssizResult>0 )
+		{
+			ptHandle->uiCnt += ssizResult;
+			if( ptHandle->uiCnt>=ptHandle->uiMax )
+			{
+				/* No -> sending finished. */
+				ptHandle->tState = SERVER_STATE_Idle;
+			}
+		}
+		else
+		{
+			fprintf(stderr, "write: %d\n", ssizResult);
+		}
+	}
+}
+
+
+
+void server_state_receive_cmd(SERVER_HANDLE_T *ptHandle)
+{
+	int iFd;
+	ssize_t ssizResult;
+	unsigned char *pucData;
+	size_t sizData;
+
+
+	/* Get the file descriptor. */
+	iFd = ptHandle->iFd;
+
+	/* Are some bytes left to receive? */
+	if( ptHandle->uiCnt>=ptHandle->uiMax )
+	{
+		/* No -> receive finished. */
+		ptHandle->tState = SERVER_STATE_Idle;
+	}
+	else if( ptHandle->uiCnt>=sizeof(ptHandle->aucCmd) )
+	{
+		fprintf(stderr, "The buffer index exceeds the buffer size!\n");
+		exit(EXIT_FAILURE);
+	}
+	else
+	{
+		/* Get the number of bytes left to send. */
+		sizData = ptHandle->uiMax - ptHandle->uiCnt;
+		/* Get the pointer to the data. */
+		pucData = ptHandle->aucCmd + ptHandle->uiCnt;
+		
+		/* Send the data. */
+		ssizResult = socket_read(iFd, pucData, sizData);
+		if( ssizResult>0 )
+		{
+			ptHandle->uiCnt += ssizResult;
+			if( ptHandle->uiCnt>=ptHandle->uiMax )
+			{
+				/* No -> sending finished. */
+				ptHandle->tState = SERVER_STATE_Idle;
+			}
+		}
+		else
+		{
+			fprintf(stderr, "read: %d\n", ssizResult);
+		}
+	}
+}
+
+
+
+void send_random_packet(SERVER_HANDLE_T *ptHandle, unsigned char ucPacketSize)
+{
+	unsigned int uiCnt;
+
+
+	ptHandle->uiMax = ucPacketSize + 1;
+	ptHandle->uiCnt = 0;
+	ptHandle->aucData[0] = ucPacketSize;
+	for(uiCnt=0; uiCnt<ucPacketSize; ++uiCnt)
+	{
+		ptHandle->aucData[uiCnt+1] = uiCnt & 0xffU;
+	}
+	ptHandle->tState = SERVER_STATE_SendData;
+}
+
+
+
+void send_random_packet_block(SERVER_HANDLE_T *ptHandle, unsigned char ucPacketSize)
+{
+	unsigned int uiCnt;
+
+
+	ptHandle->uiMax = ucPacketSize;
+	ptHandle->uiCnt = 0;
+	for(uiCnt=0; uiCnt<ucPacketSize; ++uiCnt)
+	{
+		ptHandle->aucData[uiCnt] = uiCnt & 0xffU;
+	}
+	ptHandle->tState = SERVER_STATE_SendData;
+}
+
 
 
 #define MAX_CONNECTIONS 16
@@ -110,6 +372,7 @@ static void server_loop(int iSocketFd, struct sockaddr_un *psSocketAddr)
 	SERVER_HANDLE_T atServerHandles[MAX_CONNECTIONS];
 	ssize_t ssizResult;
 	socklen_t sSockAddrLen;
+	unsigned char ucDataSize;
 
 
 	/* All server handles are free now. */
@@ -142,9 +405,23 @@ static void server_loop(int iSocketFd, struct sockaddr_un *psSocketAddr)
 				break;
 
 			case SERVER_STATE_Idle:
-				/* This instance is waiting for new commands. Notify if we can read something here. */
+			case SERVER_STATE_GetReadParameter:
+			case SERVER_STATE_GetReadBlockingParameter:
+			case SERVER_STATE_GetWriteParameter:
+				/* This instance is waiting for new data. Notify if we can read something here. */
 				iFd = atServerHandles[uiCnt].iFd;
 				FD_SET(iFd, &sReadFdSet);
+				FD_SET(iFd, &sExceptFdSet);
+				if( iFd>iFdMax )
+				{
+					iFdMax = iFd;
+				}
+				break;
+
+			case SERVER_STATE_SendData:
+				/* This instance is waiting to write data. */
+				iFd = atServerHandles[uiCnt].iFd;
+				FD_SET(iFd, &sWriteFdSet);
 				FD_SET(iFd, &sExceptFdSet);
 				if( iFd>iFdMax )
 				{
@@ -175,6 +452,7 @@ static void server_loop(int iSocketFd, struct sockaddr_un *psSocketAddr)
 					if( FD_ISSET(iFd, &sExceptFdSet) )
 					{
 						fprintf(stderr, "Except on server #%d\n", uiCnt);
+						exit(EXIT_FAILURE);
 					}
 					if( FD_ISSET(iFd, &sReadFdSet) )
 					{
@@ -195,11 +473,58 @@ static void server_loop(int iSocketFd, struct sockaddr_un *psSocketAddr)
 						/* Waiting for a new command. */
 						if( FD_ISSET(iFd, &sReadFdSet) )
 						{
-							/* Read the command byte. */
-							ssizResult = socket_read(iFd, atServerHandles[uiCnt].aucCmd, 1);
-							if( ssizResult==1 )
+							server_state_idle(atServerHandles+uiCnt);
+						}
+						break;
+
+					case SERVER_STATE_SendData:
+						if( FD_ISSET(iFd, &sWriteFdSet) )
+						{
+							server_state_send_data(atServerHandles+uiCnt);
+						}
+
+					case SERVER_STATE_GetReadParameter:
+						if( FD_ISSET(iFd, &sReadFdSet) )
+						{
+							server_state_receive_cmd(atServerHandles+uiCnt);
+							if( atServerHandles[uiCnt].tState==SERVER_STATE_Idle )
 							{
-								fprintf(stderr, "s%02d cmd: %02x\n", uiCnt, atServerHandles[uiCnt].aucCmd[0]);
+								/* Send some random bytes. */
+								ucDataSize = atServerHandles[uiCnt].aucCmd[0];
+								if( ucDataSize>0 )
+								{
+									send_random_packet(atServerHandles+uiCnt, ucDataSize);
+								}
+							}
+						}
+						break;
+				
+					case SERVER_STATE_GetReadBlockingParameter:
+						if( FD_ISSET(iFd, &sReadFdSet) )
+						{
+							server_state_receive_cmd(atServerHandles+uiCnt);
+							if( atServerHandles[uiCnt].tState==SERVER_STATE_Idle )
+							{
+								/* Send some random bytes. */
+								ucDataSize = atServerHandles[uiCnt].aucCmd[0];
+								if( ucDataSize>0 )
+								{
+									send_random_packet_block(atServerHandles+uiCnt, ucDataSize);
+								}
+							}
+						}
+						break;
+				
+					case SERVER_STATE_GetWriteParameter:
+						if( FD_ISSET(iFd, &sReadFdSet) )
+						{
+							server_state_receive_cmd(atServerHandles+uiCnt);
+							if( atServerHandles[uiCnt].tState==SERVER_STATE_Idle )
+							{
+								/* Ignore the input data. */
+								ucDataSize = atServerHandles[uiCnt].aucCmd[4];
+fprintf(stderr, "write: ignoring %d bytes of data\n", ucDataSize);
+								/* FIXME: ignore the data. */
 							}
 						}
 						break;
@@ -245,24 +570,6 @@ static void server_loop(int iSocketFd, struct sockaddr_un *psSocketAddr)
 							}
 						}
 					}
-				}
-			}
-		}
-		else
-		{
-			/* Show some stats if idle. */
-			for(uiCnt=0; uiCnt<MAX_CONNECTIONS; ++uiCnt)
-			{
-				printf("#%02d:\n", uiCnt);
-				switch( atServerHandles[uiCnt].tState )
-				{
-				case SERVER_STATE_NotConnected:
-					printf("\tnot connected\n");
-					break;
-
-				case SERVER_STATE_Idle:
-					printf("\tidle\n");
-					break;
 				}
 			}
 		}
