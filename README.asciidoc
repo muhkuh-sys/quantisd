@@ -1,0 +1,26 @@
+quantisd
+========
+Christoph Thelen <cthelen@hilscher.com>
+:Author Initials: CT
+
+
+[[About, About]]
+== About
+
+This tool is a random number generator daemon. It serves random numbers over a socket to other applications. The random numbers are generated with a Quantis USB quantum random number generator (http://www.idquantique.com).
+
+The protocol of the server is compatible to EGD (http://egd.sourceforge.net/) and PRNGD (http://prngd.sourceforge.net/).
+
+This project tries to build a bridge between the Quantis USB device and OpenSSL. The Quantis USB device can not provide it's random numbers to openSSL out of the box. OpenSSL can query an EGD compatible daemon for random numbers though.
+
+
+[[Used_software,Used software]]
+== Used software
+
+This project uses...
+
+* libusb (https://github.com/libusb/libusb)
+* the Quantis library (http://www.idquantique.com/random-number-generation/quantis-software/)
+
+
+
