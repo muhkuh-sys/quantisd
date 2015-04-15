@@ -330,6 +330,7 @@ void read_random_bytes(unsigned char *pucData, size_t sizData)
 {
 	int iResult;
 
+	printf("Requested %d random bytes.\n", sizData);
 	while( sizData!=0 )
 	{
 		iResult = QuantisRead(QUANTIS_DEVICE_USB, 0, pucData, sizData);
