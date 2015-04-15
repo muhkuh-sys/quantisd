@@ -23,4 +23,60 @@ This project uses...
 * the Quantis library (http://www.idquantique.com/random-number-generation/quantis-software/)
 
 
+[[Howto_build,How to build]]
+== How to build
+
+quantisd uses the cmake system. The version should be V2.8 or later.
+
+To build quantisd, follow these steps:
+
+1) Starting in the quantisd folder (where this readme is), create a `build` subfolder.
+2) Change to the new `build` folder and execute the command `cmake ..` to generate the makefile.
+3) Build the tool with the command `make`.
+
+.Build commands for quantisd:
+-----------------------------------------------------------------------------
+ hindin:/home/brynhild/quantisd$ mkdir build
+ hindin:/home/brynhild/quantisd$ cd build
+ hindin:/home/brynhild/quantisd/build$ cmake ..
+ -- The C compiler identification is GNU 4.8.2
+ -- The CXX compiler identification is GNU 4.8.2
+ -- Check for working C compiler: /usr/bin/cc
+ -- Check for working C compiler: /usr/bin/cc -- works
+ -- Detecting C compiler ABI info
+ -- Detecting C compiler ABI info - done
+ -- Detecting C compile features
+ -- Detecting C compile features - done
+ -- Check for working CXX compiler: /usr/bin/c++
+ -- Check for working CXX compiler: /usr/bin/c++ -- works
+ -- Detecting CXX compiler ABI info
+ -- Detecting CXX compiler ABI info - done
+ -- Detecting CXX compile features
+ -- Detecting CXX compile features - done
+ -- Configuring done
+ -- Generating done
+ -- Build files have been written to: /home/brynhild/quantisd/build
+ hindin:/home/brynhild/quantisd/build$ make
+ [...]
+-----------------------------------------------------------------------------
+
+
+[[Using_with_openssl,Using with OpenSSL]]
+== Using with OpenSSL
+
+OpenSSL can get it's random data from an EGD server - but it must not. I wanted to be sure that it uses the EGD server, so I rebuild OpenSSL with no random device files like `/dev/urandom` enabled.
+Here is how to do this:
+
+1) Get the latest OpenSSL source code from https://www.openssl.org/source/ . In this example I'm working with OpenSSL V1.0.2a.
+2) Extract the archive and change to the new folder (in my case `openssl-1.0.2a`)
+3) Run the `./Configure` script with the `--help` option to get the standard options for your platform.+
+In this example I want a static binary for a 64bit machine. The standard options are `no-shared linux-x86_64` in this case.+
+Add `-DDEVRANDOM -DDEVRANDOM_EGD='"/tmp/quantisd"` to the standard option.
+4) Run the `./Configure` script with the standard options and `-DDEVRANDOM -DDEVRANDOM_EGD='"/tmp/quantisd"`.+
+In this example this is `./Configure no-shared linux-x86_64 -DDEVRANDOM -DDEVRANDOM_EGD='"/tmp/quantisd"'`.
+5) Run `make` to build OpenSSL. The executable is in `apps/openssl` now.
+
+
+
+
 
